@@ -8,6 +8,9 @@ export type EntryRow = {
   [field: string]: string | number | boolean
 }
 
+// 登记表单提交上来的草稿：字段还没落库，值一律按字符串收，校验由业务服务层做。
+export type DraftRow = Record<string, string>
+
 export type ModuleMeta = {
   key: string
   name: string

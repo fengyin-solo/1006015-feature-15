@@ -3,7 +3,7 @@
     <header class="page-head">
       <div>
         <h2>机位分配管理</h2>
-        <p class="page-desc">维护停机位，围绕机位编号、机位类型、适用机型、廊桥配置做登记、筛选与状态流转。</p>
+        <p class="page-desc">维护停机位与占用台账；牵引落位结论实时回写「当前航班」，可按机位核对牵引任务条数。</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记停机位</button>
@@ -38,6 +38,7 @@
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
           <th>当前状态</th>
+          <th>牵引任务（起始/目标）</th>
           <th>可执行动作</th>
         </tr>
       </thead>
@@ -45,6 +46,21 @@
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
+          <td>
+            <RouterLink
+              class="link"
+              :to="{ path: '/tow', query: { from: String(row['机位编号']) } }"
+            >
+              起始 {{ towCounts[String(row['机位编号'])]?.asFrom ?? 0 }}
+            </RouterLink>
+            <span class="muted-text"> / </span>
+            <RouterLink
+              class="link"
+              :to="{ path: '/tow', query: { to: String(row['机位编号']) } }"
+            >
+              目标 {{ towCounts[String(row['机位编号'])]?.asTo ?? 0 }}
+            </RouterLink>
+          </td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -58,13 +74,15 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无机位分配数据，可先登记停机位</td>
+          <td :colspan="columns.length + 3" class="empty-state">暂无机位分配数据，可先登记停机位</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条机位分配记录</span>
+      <span>
+        共 {{ total }} 条机位记录；牵引任务条数与航空器牵引页按机位检索结果一致，两边读的是同一份数据
+      </span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -78,16 +96,18 @@ import {
   listEntries,
   moduleMeta,
   runAction as applyAction,
+  standTowCounts,
 } from '@/api/local-service'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('stand')
-const columns = ["机位编号", "机位类型", "适用机型", "廊桥配置", "近远机位", "占用时段", "当前航班", "机位状态"]
-const actions = ["分配机位", "释放机位", "封闭机位"]
-const statuses = ["空闲", "占用中", "维护中", "已封闭"]
-const stats = [{"label": "可用机位", "value": 0}, {"label": "占用中机位", "value": 0}, {"label": "封闭机位", "value": 0}]
+const columns = ['机位编号', '机位类型', '适用机型', '廊桥配置', '近远机位', '占用时段', '当前航班', '机位状态']
+const actions = ['分配机位', '释放机位', '封闭机位']
+const statuses = ['空闲', '占用中', '维护中', '已封闭']
 
 const rows = ref<EntryRow[]>([])
+const allRowsCache = ref<EntryRow[]>([])
+const towCounts = ref<Record<string, { asFrom: number; asTo: number }>>({})
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
@@ -95,9 +115,23 @@ const filterFields = columns.slice(0, 3)
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
-    count: rows.value.filter((row) => String(row.status) === status).length,
+    count: allRowsCache.value.filter((row) => String(row.status) === status).length,
   })),
 )
+const stats = computed(() => [
+  {
+    label: '可用机位',
+    value: allRowsCache.value.filter((row) => String(row.status) === '空闲').length,
+  },
+  {
+    label: '占用中机位',
+    value: allRowsCache.value.filter((row) => String(row.status) === '占用中').length,
+  },
+  {
+    label: '封闭机位',
+    value: allRowsCache.value.filter((row) => String(row.status) === '已封闭').length,
+  },
+])
 
 function resetFilters() {
   filters.value = {}
@@ -105,7 +139,7 @@ function resetFilters() {
 }
 
 function exportRows() {
-  downloadEntries(meta.key)
+  downloadEntries(meta.key, filters.value)
 }
 
 function openCreate() {
@@ -128,6 +162,8 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    allRowsCache.value = listEntries(meta.key).items
+    towCounts.value = standTowCounts()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '机位分配列表读取失败'
   }
